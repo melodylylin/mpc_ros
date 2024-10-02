@@ -111,8 +111,8 @@ def simulate(ref_states, cat_states, cat_controls,
     ctrl_effort, = ax[1].plot([], [], 'r', linewidth=2)
 
     # Obstacles
-    for (ox, oy) in obs_list:
-        circle = plt.Circle((ox, oy), 0.5, color='r')
+    for (ox, oy, obsr) in obs_list:
+        circle = plt.Circle((ox, oy), obsr, color='r')
         ax[0].add_patch(circle)
 
     current_triangle = create_triangle(reference[:3])

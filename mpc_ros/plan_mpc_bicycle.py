@@ -142,7 +142,7 @@ class MPC_CBF_Bicycle:
     ## Utilies used in MPC optimization
     # CBF Implementation
     def h_obs(self, state, obstacle, r):
-            ox, oy = obstacle
+            ox, oy, obsr = obstacle
             return ((ox - state[0])**2 + (oy - state[1])**2 - r**2)
 
 
