@@ -11,35 +11,153 @@ from mpc_ros.NVP_MPC import derive_dynamics, update_param, nlp_multiple_shooting
 from cyecca.lie import SE2, SO3EulerB321, SO3Quat
 
 # Planner
-r = 1 # turning radius
-n = 100 # number of turning points
-x0 = 0
-y0 = 0
-theta0 = 0
-xf = 9
-yf = -9
-control_point = [(x0, y0), (1.5, 0)]#, (4, -4), (8, 0), (xf, yf)]
-wp = gen_waypoints(control_point, r, n)
-ref_first = gen_reference_trajectory(wp, 1, 0.2) # wp, vel, dt
-ref_final = np.repeat(np.array([[5.5, 0.0, 0.0, 0.0]]), 50, axis=0)
-ref = np.vstack([ref_first, ref_final])
-ref_x_list = ref[:,0].tolist()
-ref_y_list = ref[:,1].tolist()
-ref_theta_list = ref[:,2].tolist()
-xt = np.array([ref[:,0], ref[:,1], ref[:,2]]).T
+from mpc_ros.plan_dubins import plan_dubins_path
+from mpc_ros.plan_rrtstar import RRTStar
+import minsnap_trajectories as ms
+from mpc_ros.plan_poly import plan_poly_traj
+
+# rrt*
+map_bound = [-10,10]
+
+start = [0.0, 0.0, 0.0]
+goal = [6.5, -7.5, -np.pi/2]
+obs_r = 1
+robot_r = 1
+plan_time = 1
+
+obs_list = [(4,0, obs_r), 
+            (8,5, obs_r),
+            (6,9, obs_r), 
+            (2, -4, obs_r), 
+            (8,-5, obs_r), 
+            (6,-9, obs_r), 
+            (5, -6, obs_r)
+        ]
+#path = [[start[0], start[1]]]
+# ====Search Path with RRT====
+# Set Initial parameters
+rrt_star = RRTStar(
+    start=[start[0], start[1]],
+    goal=[goal[0], goal[1]],
+    rand_area=map_bound,
+    obstacle_list=obs_list,
+    expand_dis=3.0,
+    robot_radius=0.5,
+    max_iter=1000,
+    search_until_max_iter=True)
+path = rrt_star.planning(animation=False)
+path = np.array(path)
+path = np.unique(path, axis=0).tolist()
+if path is None:
+    print("Cannot find path")
+else:
+    print("found path!!")     
+
+# dubin
+r = 2
+v = 1.5
+dt = 0.1
+
+traj_x_dubins = np.array([])
+traj_y_dubins = np.array([])
+traj_theta_dubins = np.array([])
+
+for i in range(len(path)-1):
+    # First Leg
+    if i == 0:
+        last_yaw = start[2]
+        next_yaw = np.arctan2(path[i+1][1] - path[i][1], path[i+1][0] - path[i][0])
+        
+    # Last Leg
+    elif i == len(path)-2:
+        last_yaw = path_theta[-1]
+        next_yaw = goal[2]
+
+    # Intermediate Leg
+    else:
+        last_yaw = path_theta[-1]
+        next_yaw = np.arctan2(path[i+1][1] - path[i][1], path[i+1][0] - path[i][0])
+    
+    path_x, path_y, path_theta, _, _ = plan_dubins_path(path[i][0], path[i][1], last_yaw, path[i+1][0], path[i+1][1], next_yaw, r,
+                    step_size=v*dt)    
+    
+    traj_x_dubins = np.concatenate((traj_x_dubins,path_x))
+    traj_y_dubins = np.concatenate((traj_y_dubins,path_y))
+    traj_theta_dubins = np.concatenate((traj_theta_dubins,path_theta))
+
+traj_vx_dubins = [0.0]
+traj_vy_dubins = [0.0]
+traj_omega_dubins = [0.0]
+traj_time = [0.0]
+time = 0
+for i in range(traj_x_dubins.shape[0]-1):
+    vx = (traj_x_dubins[i+1] - traj_x_dubins[i])/dt
+    vy= (traj_y_dubins[i+1] - traj_y_dubins[i])/dt
+    omega = (traj_theta_dubins[i+1] - traj_theta_dubins[i])/dt
+    time+=dt
+    traj_vx_dubins += [vx]
+    traj_vy_dubins += [vy]
+    traj_omega_dubins += [omega]
+    traj_time  += [time]
+
+traj_time = np.array(traj_time)    
+traj_vx_dubins = np.array(traj_vx_dubins)
+traj_vy_dubins = np.array(traj_vy_dubins)
+traj_omega_dubins = np.array(traj_omega_dubins)
+
+traj_dubins = {
+    't': traj_time,
+    'x': traj_x_dubins,
+    'y': traj_y_dubins,
+    'theta': traj_theta_dubins,
+    'vx': traj_vx_dubins,
+    'vy': traj_vy_dubins,
+    'omega': traj_omega_dubins,
+    }
+
+# poly
+num_points = 3
+boundary_cdn = []
+idx = 0
+for i in range(num_points):
+    wp = ms.Waypoint(
+        time=traj_dubins['t'][idx],
+        position=np.array([traj_dubins['x'][idx], traj_dubins['y'][idx]]),
+        velocity=np.array([traj_dubins['vx'][idx+1], traj_dubins['vy'][idx+1]]),
+    )
+    boundary_cdn.append(wp)
+    idx = int(idx + traj_dubins['t'].shape[0]/num_points)
+
+idx = int(traj_dubins['t'].shape[0]-1)
+goal_wp = ms.Waypoint(
+        time=traj_dubins['t'][idx],
+        position=np.array([traj_dubins['x'][idx], traj_dubins['y'][idx]]),
+        velocity=np.array([traj_dubins['vx'][idx-1],traj_dubins['vy'][idx-1]]),
+)
+boundary_cdn.append(goal_wp)  
+
+position, velocity = plan_poly_traj(boundary_cdn,traj_dubins['t'][idx], dt)
+traj_x_poly = position[:, 0]
+traj_y_poly = position[:, 1]
+
+traj_theta_poly = np.arctan2(
+                velocity[:, 1], velocity[:, 0]
+            )
+
+xt = np.array([traj_x_poly.tolist(), traj_y_poly.tolist(), traj_theta_poly.tolist()]).T
 
 eqs = derive_dynamics()
 
 # Cost Weight
-Q_x = 5
-Q_y = 5
-Q_theta = 0.5
+Q_x = 1
+Q_y = 1
+Q_theta = 0.05
 R_v = 0.5
-R_omega = 0.05
+R_omega = 0.1
 Q = ca.diagcat(Q_x, Q_y, Q_theta)
 R = ca.diagcat(R_v, R_omega)
 
-N = 20
+N = 50
 dt = 0.2
 nlp = nlp_multiple_shooting_cbf(eqs, N, dt, Q, R)
 solver = ca.nlpsol('solver', 'ipopt', nlp['nlp_prob'], nlp['opts'])
@@ -48,7 +166,7 @@ n_x = nlp['n_x']
 n_u = nlp['n_u']
 obstacles = nlp['obstacles']
 
-v_max = 1
+v_max = 1.5
 r_c_max = ca.pi/4
 v_min = -v_max
 r_c_min = -r_c_max
@@ -142,12 +260,8 @@ class NVPPublisher(Node):
             avg_track_error = np.mean(np.array(self.tracking_error))
             print('tracking error',avg_track_error) 
 
-        # if (float(xi.param[0]) > -1e-1) and (self.idx < len(ref_x_list)-1):
-        if (self.idx == 56):
-            self.idx = self.idx
-        else:
+        if (float(xi.param[0]) > -1e-1) and (self.idx < (traj_x_poly.shape[0])-1):
             self.idx += 1
-        print(self.idx)
         args['P'] = ca.vertcat(p, update_param(state_0, xt, self.idx, N))
         X0 = ca.repmat(state_0, 1, N + 1)
 
@@ -162,7 +276,6 @@ class NVPPublisher(Node):
         self.u0 = ca.horzcat(u[:, 1:],ca.reshape(u[:, -1], -1, 1))
 
         cmd_vel = u[:,0]
-        print(cmd_vel[0])
         vel_msg = Twist()
         vel_msg.linear.x = float(cmd_vel[0])
         vel_msg.angular.z = float(cmd_vel[1])
@@ -213,7 +326,7 @@ class NVPPublisher(Node):
         msg_path = Path()
         msg_path.header.frame_id = 'map'
         msg_path.header.stamp = self.get_clock().now().to_msg()
-        for x, y, theta in zip(ref_x_list, ref_y_list, ref_theta_list):
+        for x, y, theta in zip(traj_x_poly, traj_y_poly, traj_theta_poly):
             pose = PoseStamped()
             pose.header.stamp = self.get_clock().now().to_msg()
             pose.header.frame_id = 'map'

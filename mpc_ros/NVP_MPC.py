@@ -135,8 +135,8 @@ def nlp_multiple_shooting_cbf(eqs, N, dt, Q, R):
 
     obstacles = [(4,0)]#, (8,5), (6,9), (2,-4), (8,-5), (6,-9), (5,-6)]
     obs_diam = 2
-    alpha= 0.2  #Parameter for scalar class-K function, must be positive
-    rob_diam = 0.3
+    alpha= 0.001  #Parameter for scalar class-K function, must be positive
+    rob_diam = 0.5
     
     for k in range(N):
         u = u_opt[:,k]

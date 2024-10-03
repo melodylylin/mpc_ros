@@ -32,8 +32,12 @@ endif()
 ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
-  scripts/nvp_ros_poly.py
   scripts/nvp_ros_cbf.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/nvp_ros_poly.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
